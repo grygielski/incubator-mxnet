@@ -27,6 +27,7 @@
 #include "../common.h"
 #include "../../tensor/matrix_op-inl.h"
 #include "../../contrib/transformer-inl.h"
+#include "mkldnn_transformer-inl.h"
 #include "mkldnn_subgraph_base-inl.h"
 
 namespace mxnet {
@@ -79,13 +80,16 @@ class SgMKLDNNTransformerProperty : public SubgraphProperty {
     node_name << "_sg_mkldnn";
   
     std::string op_name;
-    InterleavedMatMulParam param;
+    MKLDNNInterleavedMatMulParam new_param;
     DFSVisit(new_sym.outputs, [&](const nnvm::ObjectPtr &node) {
       if (node->op() && 
           (node->op()->name == "_contrib_interleaved_matmul_selfatt_qk" ||
            node->op()->name == "_contrib_interleaved_matmul_selfatt_valatt")) {
         op_name = node->op()->name;
-        param = nnvm::get<InterleavedMatMulParam>(node->attrs.parsed);
+        auto param = nnvm::get<InterleavedMatMulParam>(node->attrs.parsed);
+        new_param.heads = param.heads;
+        new_param.quantized = false;
+        new_param.enable_float_output = false;
       }
     });
     node_name << op_name << "_" << std::to_string(subgraph_id);
@@ -95,7 +99,7 @@ class SgMKLDNNTransformerProperty : public SubgraphProperty {
     n->attrs.op = Op::Get("_sg_mkldnn" + op_name);
     CHECK(n->attrs.op);
     n->attrs.subgraphs.emplace_back(std::make_shared<nnvm::Symbol>(new_sym));
-    n->attrs.parsed = param;
+    n->attrs.parsed = new_param;
     return n;
   }
 
