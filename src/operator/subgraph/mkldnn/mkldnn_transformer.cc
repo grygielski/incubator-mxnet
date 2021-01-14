@@ -111,7 +111,7 @@ void MKLDNNInterleavedMatMulSelfAttQKCPU(const nnvm::NodeAttrs& attrs,
 
       dnnl::memory::dims src1_dims = {HEADS*BS, SEQ_LEN, EMBED/HEADS/3};
       dnnl::memory::dims src2_dims = {HEADS*BS, EMBED/HEADS/3, SEQ_LEN};
-      dnnl::memory::dims dst_dims = {HEADS*BS, SEQ_LEN, SEQ_LEN};
+      dnnl::memory::dims dst_dims  = {HEADS*BS, SEQ_LEN, SEQ_LEN};
 
       dnnl::memory::dims src1_strides = {3*(EMBED/HEADS/3), EMBED*BS, 1};
       dnnl::memory::dims src2_strides = {3*(EMBED/HEADS/3), 1, EMBED*BS};
@@ -182,8 +182,11 @@ void MKLDNNInterleavedMatMulSelfAttQKCPU(const nnvm::NodeAttrs& attrs,
       float min_data = inputs[1].dptr<float>()[0];
       float max_data = inputs[2].dptr<float>()[0];
 
+      
+
       float data_scale = GetQuantizeScale(mshadow::kInt8, min_data, max_data);
-      const float scale = 1.0f / (data_scale * data_scale) / sqrt(static_cast<float>(EMBED/HEADS/3));
+      const float scale = GetQuantizeScale(mshadow::kInt8, param.min_calib_range.value(), param.max_calib_range.value()) 
+                          / (data_scale * data_scale) / sqrt(static_cast<float>(EMBED/HEADS/3));
 
       dnnl::primitive_attr attr;
       attr.set_output_scales(0, {scale});
@@ -591,7 +594,8 @@ void MKLDNNInterleavedMatMulSelfAttValAttCPU(const nnvm::NodeAttrs& attrs,
       float qkv_scale = GetQuantizeScale(mshadow::kInt8, min_qkv, max_qkv);
       float att_scale = GetQuantizeScale(mshadow::kUint8, min_att, max_att);
 
-      const float scale = 1.0f / (qkv_scale * att_scale);
+      const float scale = GetQuantizeScale(mshadow::kInt8, param.min_calib_range.value(), param.max_calib_range.value()) 
+                          / (qkv_scale * att_scale);
 
       dnnl::primitive_attr attr;
       attr.set_output_scales(0, {scale});
