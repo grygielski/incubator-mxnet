@@ -189,8 +189,20 @@ void MKLDNNInterleavedMatMulSelfAttQKOp::Forward(
     }
     out_scale /= sqrt(static_cast<float>(EMBED/HEADS/3));
 
+    MSHADOW_TYPE_SWITCH(inputs[0].dtype(), DType, {
+      cached_data1_mem_ = std::make_shared<dnnl::memory>(src1_md, engine, inputs[0].data().dptr<DType>());
+      cached_data2_mem_ = std::make_shared<dnnl::memory>(src2_md, engine, inputs[0].data().dptr<DType>() + (EMBED/HEADS/3));
+    });
+    MSHADOW_TYPE_SWITCH(outputs[0].dtype(), DType, {
+      cached_out_mem_ = std::make_shared<dnnl::memory>(dst_md, engine, outputs[0].data().dptr<DType>());
+    });
+
     dnnl::primitive_attr attr;
     if (param_.with_mask) {
+      const int mask_index = param_.quantized ? 3 : 1;
+      cached_mask_mem_ = std::make_shared<dnnl::memory>(dst_md, engine, inputs[mask_index].data().dptr<float>());
+      apply_mask_ = std::make_shared<dnnl::reorder>(*cached_mask_mem_, *cached_out_mem_);
+
       dnnl::post_ops post_op;
       post_op.append_sum(1);
       attr.set_post_ops(post_op);
@@ -201,19 +213,15 @@ void MKLDNNInterleavedMatMulSelfAttQKOp::Forward(
 
     fwd_ = std::make_shared<dnnl::matmul>(matmul_pd);
 
-    MSHADOW_TYPE_SWITCH(inputs[0].dtype(), DType, {
-      cached_data1_mem_ = std::make_shared<dnnl::memory>(src1_md, engine, inputs[0].data().dptr<DType>());
-      cached_data2_mem_ = std::make_shared<dnnl::memory>(src2_md, engine, inputs[0].data().dptr<DType>() + (EMBED/HEADS/3));
-    });
-    MSHADOW_TYPE_SWITCH(outputs[0].dtype(), DType, {
-      cached_out_mem_ = std::make_shared<dnnl::memory>(dst_md, engine, outputs[0].data().dptr<DType>());
-    });
-
     args_[DNNL_ARG_SRC]     = *cached_data1_mem_;
     args_[DNNL_ARG_WEIGHTS] = *cached_data2_mem_;
     args_[DNNL_ARG_DST]     = *cached_out_mem_;
     initialized_ = true;
   } else {
+    if (param_.with_mask) {
+      const int mask_index = param_.quantized ? 3 : 1;
+      cached_mask_mem_->set_data_handle(reinterpret_cast<void*>(inputs[mask_index].data().dptr<float>()));
+    }
     MSHADOW_TYPE_SWITCH(inputs[0].dtype(), DType, {
       cached_data1_mem_->set_data_handle(reinterpret_cast<void*>(inputs[0].data().dptr<DType>()));
       cached_data2_mem_->set_data_handle(reinterpret_cast<void*>(inputs[0].data().dptr<DType>() + (EMBED/HEADS/3)));
@@ -224,9 +232,7 @@ void MKLDNNInterleavedMatMulSelfAttQKOp::Forward(
   }
 
   if (param_.with_mask) {
-    const int mask_index = param_.quantized ? 3 : 1;
-    float* mask = inputs[mask_index].data().dptr<float>();
-    memcpy(cached_out_mem_->get_data_handle(), mask, sizeof(float)*HEADS*BS*SEQ_LEN*SEQ_LEN);
+    MKLDNNStream::Get()->RegisterPrimArgs(*apply_mask_, {{DNNL_ARG_FROM, *cached_mask_mem_}, {DNNL_ARG_TO, *cached_out_mem_}});
   }
 
   MKLDNNStream::Get()->RegisterPrimArgs(*fwd_, args_);
